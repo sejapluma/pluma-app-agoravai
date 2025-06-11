@@ -17,8 +17,6 @@ export async function updateSession(request: NextRequest) {
   }
 
   const res = NextResponse.next()
-
-  // Create a Supabase client configured to use cookies
   const supabase = createMiddlewareClient({ req: request, res })
 
   // Check if this is an auth callback
@@ -32,8 +30,28 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(new URL("/", request.url))
   }
 
-  // Refresh session if expired - required for Server Components
-  await supabase.auth.getSession()
+  let session = null
+  try {
+    // Attempt to get and refresh session. This is the primary place for token refresh.
+    const {
+      data: { session: currentSession },
+    } = await supabase.auth.getSession()
+    session = currentSession
+  } catch (error: any) {
+    // Handle specific refresh token error
+    if (error.name === "AuthApiError" && error.message.includes("Invalid Refresh Token: Already Used")) {
+      console.warn("AuthApiError: Invalid Refresh Token: Already Used. Forcing re-login.")
+      // Clear cookies and redirect to login
+      res.cookies.delete("sb-access-token")
+      res.cookies.delete("sb-refresh-token")
+      const redirectUrl = new URL("/auth/login", request.url)
+      return NextResponse.redirect(redirectUrl)
+    }
+    console.error("Error during session refresh in middleware:", error)
+    // For any other error during getSession, assume session is invalid and redirect to login
+    const redirectUrl = new URL("/auth/login", request.url)
+    return NextResponse.redirect(redirectUrl)
+  }
 
   // Protected routes - redirect to login if not authenticated
   const isAuthRoute =
@@ -42,10 +60,7 @@ export async function updateSession(request: NextRequest) {
     request.nextUrl.pathname === "/auth/callback"
 
   if (!isAuthRoute) {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
-
+    // If session is null after the try-catch, it means the user is not authenticated
     if (!session) {
       const redirectUrl = new URL("/auth/login", request.url)
       return NextResponse.redirect(redirectUrl)
